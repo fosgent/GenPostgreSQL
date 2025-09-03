@@ -65,7 +65,18 @@ class App(tb.Window):
     # ---------------- UI ----------------
     def _build_ui(self):
         nb = tb.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=16, pady=16)
+        nb.pack(fill=BOTH, expand=True, padx=20, pady=20)
+        style = tb.Style()
+        style.configure("TNotebook.Tab", cursor="hand2", padding=[20,10], font=("Arial",10), background="#dfe6e9", foreground="#2d3436")
+        style.map("TNotebook.Tab", background=[("selected","#a7d4ff"), ("active", "#ffeaa7")], foreground=[("selected","#2d3436")])
+        def on_motion(event):
+            try:
+                tab_index = nb.index(f"@{event.x},{event.y}")
+                nb.config(cursor="hand2" if tab_index >= 0 else "")
+            except Exception:
+                nb.config(cursor="")
+        nb.bind("<Motion>", on_motion)
+        nb.bind("<Leave>", lambda e: nb.config(cursor=""))
 
         # Generation tab
         gen_tab = tb.Frame(nb)
