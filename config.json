@@ -1,0 +1,11 @@
+{
+    "db_name": "",
+    "num_rows": 10001,
+    "num_tables": 1,
+    "template": "Строки текста",
+    "host": "localhost",
+    "port": "5433",
+    "user": "postgres",
+    "password": "1234567",
+    "psql_path": "C:/Program Files/PostgreSQL/17/bin/psql.exe"
+}

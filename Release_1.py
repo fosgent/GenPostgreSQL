@@ -16,7 +16,7 @@ import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 import psycopg2
 
-__version__ = "1.1.15"
+__version__ = "1.0.1"
 __author__ = "Евгений Сиротенко"
 __description__ = "Программа для генерации и импорта тестовых баз PostgreSQL."
 
