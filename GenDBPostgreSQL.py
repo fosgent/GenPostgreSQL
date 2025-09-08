@@ -10,7 +10,6 @@ import threading
 import random
 import string
 from datetime import datetime
-import socket
 import psycopg2
 import webbrowser
 
@@ -389,10 +388,12 @@ class App(tb.Window):
         try:
             subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
                             "-c", f'DROP DATABASE IF EXISTS "{db_name}";'],
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, env=env,
+               creationflags=subprocess.CREATE_NO_WINDOW)
             result = subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
                             "-c", f'CREATE DATABASE "{db_name}";'],
-                            capture_output=True, text=True, env=env)
+                            capture_output=True, text=True, env=env,
+               creationflags=subprocess.CREATE_NO_WINDOW)
             if result.returncode != 0:
                 self._log(result.stderr)
                 return False
@@ -408,10 +409,22 @@ class App(tb.Window):
         env["PGPASSWORD"] = self.password.get()
         psql = self.psql_path.get()
         port, user = self.port.get(), self.user.get()
+
+        # флаг для Windows, чтобы не открывалась консоль
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
+
         try:
-            self.psql_process = subprocess.Popen([psql, f"--host={host}", f"--port={port}", f"--username={user}",
-                                                 "-d", db_name, "-f", filepath],
-                                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            self.psql_process = subprocess.Popen(
+                [psql, f"--host={host}", f"--port={port}", f"--username={user}",
+                "-d", db_name, "-f", filepath],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                creationflags=creationflags  # <-- вот это
+            )
             while True:
                 line = self.psql_process.stdout.readline()
                 if not line:
@@ -438,7 +451,8 @@ class App(tb.Window):
         try:
             subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
                             "-c", f'DROP DATABASE IF EXISTS "{db_name}";'],
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, env=env,
+               creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception as e:
             self._log(f"Ошибка удаления базы: {e}")
 
