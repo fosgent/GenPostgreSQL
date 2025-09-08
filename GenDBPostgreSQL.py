@@ -118,7 +118,7 @@ class App(tb.Window):
         self.cancel_button.grid(row=0, column=2, padx=6, pady=6)
 
         self.copylog_button = tb.Button(btns, text="Копировать лог", command=self._copy_log,
-                                        bootstyle="warning", cursor="hand2")
+                                        bootstyle="warning", cursor="arrow", state=DISABLED)
         self.copylog_button.grid(row=0, column=3, padx=6, pady=6, sticky=W)
 
         self.about_button = tb.Button(btns, text="О программе", command=self._show_about,
@@ -195,7 +195,7 @@ class App(tb.Window):
     def _show_about(self):
         msg = f"{__description__}\n\nВерсия: {__version__}\nАвтор: {__author__}"
         if messagebox.askyesno("О программе", msg + "\n\nОткрыть страницу GitHub для проверки обновлений?"):
-            webbrowser.open("https://github.com/fosgent/genpost")
+            webbrowser.open("https://github.com/fosgent/GenPostgreSQL")
 
     # ---------------- Старт процесса -----------------
     def _start(self):
