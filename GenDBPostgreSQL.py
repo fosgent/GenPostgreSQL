@@ -1,83 +1,57 @@
 import os
 import sys
-import time
-import tempfile
-import re
-import threading
-import subprocess
-import random
-import string
-from datetime import datetime
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
+import subprocess
+import threading
+import random
+import string
+from datetime import datetime
+import socket
 import psycopg2
-import json
+import webbrowser
 
-CONFIG_FILE = "config.json"
-
-# ---------------- Config helpers ----------------
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_config(app):
-    try:
-        data = {
-            "db_name": app.db_name_input.get(),
-            "num_rows": app.num_rows.get(),
-            "num_tables": app.num_tables.get(),
-            "template": app.template_display.get(),
-            "host": app.host.get(),
-            "port": app.port.get(),
-            "user": app.user.get(),
-            "password": app.password.get(),
-            "psql_path": app.psql_path.get()
-        }
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Ошибка сохранения config.json: {e}")
-
-__version__ = "1.1.15"
+__version__ = "1.1.11"
 __author__ = "Евгений Сиротенко"
 __description__ = "Программа для генерации и импорта тестовых баз PostgreSQL."
+
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def write_version_file(version):
     try:
         if getattr(sys, 'frozen', False):
-            path = os.path.join(os.path.dirname(sys.executable), "version.txt")
-            with open(path, "w", encoding="utf-8") as f:
+            version_path = os.path.join(get_app_dir(), "version.txt")
+            with open(version_path, "w", encoding="utf-8") as f:
                 f.write(version)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Ошибка записи version.txt: {e}")
 
 class App(tb.Window):
     def __init__(self):
         super().__init__(themename="litera")
         self.title("Генератор базы PostgreSQL")
         self.geometry("1000x850+300+50")
-        self.minsize(1000, 1050)
-        self.maxsize(1000, 1250)
+        self.minsize(1000, 850)
+        self.maxsize(1000, 1400)
 
-        # --- Vars ---
-        self.db_name_input = tk.StringVar()
-        self.num_rows = tk.IntVar(value=1000)
-        self.num_tables = tk.IntVar(value=1)
-        self.template_display = tk.StringVar(value="Строки текста")
+        # ---------------- Переменные -----------------
+        self.db_name_input = tb.StringVar()
+        self.num_rows = tb.IntVar(value=1000)  # количество строк
+        self.num_tables = tb.IntVar(value=1)
+        self.table_template = tb.StringVar(value="text")
+        self.template_display = tb.StringVar(value="Строки текста")
 
-        self.host = tk.StringVar(value="localhost")
-        self.port = tk.StringVar(value="5433")
-        self.user = tk.StringVar(value="postgres")
-        self.password = tk.StringVar(value="1234567")
-        self.psql_path = tk.StringVar(value=r"C:/Program Files/PostgreSQL/17/bin/psql.exe")
+        self.host = tb.StringVar(value="localhost")
+        self.port = tb.StringVar(value="5433")
+        self.user = tb.StringVar(value="postgres")
+        self.password = tb.StringVar(value="1234567")
+        self.psql_path = tb.StringVar(value=r"C:/Program Files/PostgreSQL/17/bin/psql.exe")
 
         self.cancel_event = threading.Event()
         self.generated_file_path = None
@@ -90,17 +64,16 @@ class App(tb.Window):
             "ID + Дата + Сумма": "order"
         }
 
+        self.can_cancel = False
         self._build_ui()
 
-    # ---------------- UI ----------------
+    # ---------------- UI -----------------
     def _build_ui(self):
         nb = tb.Notebook(self)
         nb.pack(fill=BOTH, expand=True, padx=20, pady=20)
         style = tb.Style()
-        style.configure("TNotebook.Tab", cursor="hand2", padding=[20,10], font=("Arial",10),
-                        background="#dfe6e9", foreground="#2d3436")
-        style.map("TNotebook.Tab", background=[("selected","#a7d4ff"), ("active", "#ffeaa7")],
-                  foreground=[("selected","#2d3436")])
+        style.configure("TNotebook.Tab", cursor="hand2", padding=[20,10], font=("Arial",10), background="#dfe6e9", foreground="#2d3436")
+        style.map("TNotebook.Tab", background=[("selected","#a7d4ff"), ("active", "#ffeaa7")], foreground=[("selected","#2d3436")])
         def on_motion(event):
             try:
                 tab_index = nb.index(f"@{event.x},{event.y}")
@@ -110,286 +83,261 @@ class App(tb.Window):
         nb.bind("<Motion>", on_motion)
         nb.bind("<Leave>", lambda e: nb.config(cursor=""))
 
-        # Generation tab
+        # --- Вкладка Генерация ---
         gen_tab = tb.Frame(nb)
         nb.add(gen_tab, text="Генерация")
 
         top = tb.Labelframe(gen_tab, text="Параметры генерации", padding=12)
-        top.pack(fill="x", padx=8, pady=8)
-        top.columnconfigure(1, weight=1)
+        top.pack(fill=X, padx=8, pady=8)
 
         def add_row(r, label, widget):
-            tb.Label(top, text=label).grid(row=r, column=0, sticky="w", padx=(0,12), pady=6)
-            widget.grid(row=r, column=1, sticky="ew", pady=6)
+            tb.Label(top, text=label).grid(row=r, column=0, sticky=W, padx=(0, 12), pady=6)
+            widget.grid(row=r, column=1, sticky=EW, pady=6)
+        top.columnconfigure(1, weight=1)
 
         add_row(0, "Название базы (необязательно):", tb.Entry(top, textvariable=self.db_name_input))
         add_row(1, "Количество строк:", tb.Entry(top, textvariable=self.num_rows))
         add_row(2, "Количество таблиц:", tb.Entry(top, textvariable=self.num_tables))
-        tb.Label(top, text="Шаблон таблицы:").grid(row=3, column=0, sticky="w", padx=(0,12), pady=6)
-        tb.OptionMenu(top, self.template_display, *self.template_map.keys()).grid(row=3, column=1, sticky="w")
 
-        # Buttons
+        tb.Label(top, text="Шаблон таблицы:").grid(row=3, column=0, sticky=W, padx=(0,12), pady=6)
+        opt = tb.OptionMenu(top, self.template_display, *self.template_map.keys())
+        opt.grid(row=3, column=1, sticky=W, pady=6)
+
+        # Кнопки управления
         btns = tb.Frame(gen_tab)
-        btns.pack(fill="x", padx=8, pady=6)
+        btns.pack(fill=X, padx=8, pady=6)
         for i in range(5):
             btns.columnconfigure(i, weight=1)
 
-        self.start_button = tb.Button(btns, text="Сгенерировать и импортировать", command=self._start,
-                                      bootstyle="success", cursor="hand2", width=30)
-        self.start_button.grid(row=0, column=1, padx=6, pady=6, sticky="e")
+        self.start_button = tb.Button(btns, text="Сгенерировать и импортировать", width=30,
+                                      command=self._start, bootstyle="success", cursor="hand2")
+        self.start_button.grid(row=0, column=1, padx=6, pady=6, sticky=E)
 
         self.cancel_button = tb.Button(btns, text="Отмена", command=self._cancel, bootstyle="danger",
-                                       cursor="arrow", state="disabled")
+                                       cursor="arrow", state=DISABLED)
         self.cancel_button.grid(row=0, column=2, padx=6, pady=6)
 
-        self.copylog_button = tb.Button(btns, text="Копировать лог", command=self._copy_log, bootstyle="warning", state="disabled", cursor="arrow")
-        self.copylog_button.grid(row=0, column=3, padx=6, pady=6, sticky="w")
+        self.copylog_button = tb.Button(btns, text="Копировать лог", command=self._copy_log,
+                                        bootstyle="warning", cursor="hand2")
+        self.copylog_button.grid(row=0, column=3, padx=6, pady=6, sticky=W)
 
-        self.about_button = tb.Button(btns, text="О программе", command=self._show_about, bootstyle="secondary", cursor="hand2")
-        self.about_button.grid(row=0, column=4, padx=6, pady=6, sticky="w")
+        self.about_button = tb.Button(btns, text="О программе", command=self._show_about,
+                                      bootstyle="secondary", cursor="hand2")
+        self.about_button.grid(row=0, column=4, padx=6, pady=6, sticky=W)
 
-        # Progress & log
+        # Прогресс и лог
         prog_box = tb.Frame(gen_tab)
-        prog_box.pack(fill="x", padx=10, pady=(8,0))
+        prog_box.pack(fill=X, padx=10, pady=(8,0))
         self.progress = tb.Progressbar(prog_box, length=1000, bootstyle="info-striped")
-        self.progress.pack(fill="x")
+        self.progress.pack(fill=X)
         self.progress_label = tb.Label(gen_tab, text="0%")
         self.progress_label.pack(pady=(4,0))
 
-        self.log = ScrolledText(gen_tab, height=18, wrap="word", state="disabled")
-        self.log.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log = ScrolledText(gen_tab, height=18, wrap="word", state=tk.DISABLED)
+        self.log.pack(fill=BOTH, expand=True, padx=10, pady=10)
 
-        # Connection tab
+        # --- Вкладка Подключение ---
         conn_tab = tb.Frame(nb)
         nb.add(conn_tab, text="Подключение")
+
         conn_box = tb.Labelframe(conn_tab, text="Параметры подключения PostgreSQL", padding=12)
-        conn_box.pack(fill="x", padx=8, pady=8)
+        conn_box.pack(fill=X, padx=8, pady=8)
+
+        def add_conn_row(r, label, widget):
+            tb.Label(conn_box, text=label).grid(row=r, column=0, sticky=W, padx=(0,12), pady=6)
+            widget.grid(row=r, column=1, sticky=EW, pady=6)
         conn_box.columnconfigure(1, weight=1)
-        def add_conn(r, label, widget):
-            tb.Label(conn_box, text=label).grid(row=r, column=0, sticky="w", padx=(0,12), pady=6)
-            widget.grid(row=r, column=1, sticky="ew", pady=6)
-        add_conn(0, "Хост:", tb.Entry(conn_box, textvariable=self.host))
-        add_conn(1, "Порт:", tb.Entry(conn_box, textvariable=self.port))
-        add_conn(2, "Пользователь:", tb.Entry(conn_box, textvariable=self.user))
-        add_conn(3, "Пароль:", tb.Entry(conn_box, textvariable=self.password, show="*"))
-        add_conn(4, "Путь к psql.exe:", tb.Entry(conn_box, textvariable=self.psql_path))
+
+        add_conn_row(0, "Хост:", tb.Entry(conn_box, textvariable=self.host))
+        add_conn_row(1, "Порт:", tb.Entry(conn_box, textvariable=self.port))
+        add_conn_row(2, "Пользователь:", tb.Entry(conn_box, textvariable=self.user))
+        add_conn_row(3, "Пароль:", tb.Entry(conn_box, textvariable=self.password, show="*"))
+        add_conn_row(4, "Путь к psql.exe:", tb.Entry(conn_box, textvariable=self.psql_path))
 
         conn_btns = tb.Frame(conn_tab)
-        conn_btns.pack(fill="x", padx=8, pady=6)
-        conn_btns.columnconfigure(1, weight=1)
+        conn_btns.pack(fill=X, padx=8, pady=6)
+        for i in range(3):
+            conn_btns.columnconfigure(i, weight=1)
+
         self.test_button = tb.Button(conn_btns, text="Проверить подключение", command=self._test_connection,
-                                     bootstyle="warning", cursor="hand2")
+                                     bootstyle="warning", cursor="hand2", width=25)
         self.test_button.grid(row=0, column=1, pady=6)
 
         # Footer
         self.footer_label = tb.Label(self, font=("Arial",9), foreground="gray")
-        self.footer_label.pack(side="bottom", pady=(0,6))
-        self._update_footer()
+        self.footer_label.pack(side=BOTTOM, pady=(0,6))
 
-                # Загрузка сохранённых настроек
-        config = load_config()
-        self._apply_config(config)
+        def _update_footer_time():
+            current_time = datetime.now().strftime("%H:%M:%S")
+            self.footer_label.config(text=f"Версия: {__version__} | {current_time}")
+            self.after(1000, _update_footer_time)
+        _update_footer_time()
 
-        # Привязка закрытия окна к сохранению
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    def _apply_config(self, config):
-        if not config:
+    # ---------------- Лог -----------------
+    def _log(self, message):
+        message = message.strip()
+        if not message:
             return
-        try:
-            self.db_name_input.set(config.get("db_name", ""))
-            self.num_rows.set(config.get("num_rows", 1000))
-            self.num_tables.set(config.get("num_tables", 1))
-            self.template_display.set(config.get("template", "Строки текста"))
-            self.host.set(config.get("host", "localhost"))
-            self.port.set(config.get("port", 5433))
-            self.user.set(config.get("user", "postgres"))
-            self.password.set(config.get("password", "1234567"))
-            self.psql_path.set(config.get("psql_path", r"C:/Program Files/PostgreSQL/17/bin/psql.exe"))
-        except Exception as e:
-            print(f"Ошибка применения настроек: {e}")
-
-    def _on_close(self):
-        save_config(self)
-        self.destroy()
-
-    # ---------------- Helpers / Log ----------------
-    def _update_footer(self):
-        self.footer_label.config(text=f"Версия: {__version__} | {datetime.now().strftime('%H:%M:%S')}")
-        self.after(1000, self._update_footer)
-
-    def _log(self, message, color=None, bold=False):
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        text = f"[{ts}] {message}\n"
-        self.log.config(state="normal")
-        tag = None
-        if color or bold:
-            tag = f"tag_{color}_{'b' if bold else 'n'}"
-            try:
-                if not self.log.tag_names().__contains__(tag):
-                    font = ("Arial", 10, "bold" if bold else "normal")
-                    self.log.tag_config(tag, foreground=(color if color else "black"), font=font)
-            except Exception:
-                pass
-            self.log.insert("end", text, tag)
-        else:
-            self.log.insert("end", text)
-        self.log.see("end")
-        self.log.config(state="disabled")
+        self.log.config(state=tk.NORMAL)
+        self.log.insert(tk.END, f"{message}\n")
+        self.log.see(tk.END)
+        self.log.config(state=tk.DISABLED)
 
     def _copy_log(self):
         try:
-            data = self.log.get("1.0", "end").strip()
-            if data:
-                self.clipboard_clear()
-                self.clipboard_append(data)
-                self.update()
-                messagebox.showinfo("Скопировано", "Лог скопирован в буфер обмена.")
-            else:
-                messagebox.showwarning("Внимание", "Лог пустой.")
+            text = self.log.get(1.0, tk.END)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            messagebox.showinfo("Скопировано", "Лог скопирован в буфер обмена.")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось скопировать лог: {e}")
 
     def _show_about(self):
         msg = f"{__description__}\n\nВерсия: {__version__}\nАвтор: {__author__}"
-        if messagebox.askyesno("О программе", msg + "\n\nОткрыть страницу GitHub?"):
-            import webbrowser
-            webbrowser.open("https://github.com/fosgent/GenPostgreSQL")
+        if messagebox.askyesno("О программе", msg + "\n\nОткрыть страницу GitHub для проверки обновлений?"):
+            webbrowser.open("https://github.com/fosgent/genpost")
 
+    # ---------------- Старт процесса -----------------
     def _start(self):
         if self.import_thread and self.import_thread.is_alive():
             messagebox.showwarning("Внимание", "Процесс уже запущен!")
             return
         self.cancel_event.clear()
-        self._set_progress(0)
-        self.log.config(state="normal"); self.log.delete(1.0, "end"); self.log.config(state="disabled")
-        self._set_start_busy(True)
+        self.progress['value'] = 0
+        self.progress_label.config(text="0%")
+        self.log.config(state=tk.NORMAL)
+        self.log.delete(1.0, tk.END)
+        self.log.config(state=tk.DISABLED)
+        self._set_start_button_busy(True)
         self.import_thread = threading.Thread(target=self._generate_and_import, daemon=True)
         self.import_thread.start()
 
+    # ---------------- Кнопка Отмена -----------------
     def _cancel(self):
-        if not (self.import_thread and self.import_thread.is_alive()):
+        if not self.import_thread or not self.import_thread.is_alive():
             return
         self.cancel_event.set()
-        self._log("Отмена запрошена.", color="red")
+        self._log("Отмена запрошена.")
+
         if self.psql_process and self.psql_process.poll() is None:
             try:
                 self.psql_process.terminate()
-                try:
-                    self.psql_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.psql_process.kill()
-                self._log("Процесс psql остановлен.", color="red")
+                self._log("Импорт остановлен.")
             except Exception as e:
-                self._log(f"Ошибка остановки psql: {e}", color="red")
+                self._log(f"Ошибка остановки процесса: {e}")
+
         self._cleanup_file()
         db_name = self.db_name_input.get().strip() or f"PostgreSQL{self.num_rows.get()}rows"
         self._drop_database(db_name)
-        self._set_progress(0)
-        self._set_start_busy(False)
 
-    def _set_start_busy(self, busy: bool):
+        self.progress['value'] = 0
+        self.progress_label.config(text="0%")
+        self._set_start_button_busy(False)
+
+    # ---------------- Set busy -----------------
+    def _set_start_button_busy(self, busy: bool):
         if busy:
-            self.start_button.config(text="Подождите...", state="disabled", cursor="arrow")
-            self.cancel_button.config(state="normal", cursor="hand2")
-            self.copylog_button.config(state="normal", cursor="hand2")  # активируем лог
+            self.start_button.config(text="Подождите...", state=DISABLED, cursor="arrow")
+            self.cancel_button.config(state=NORMAL, cursor="hand2")
+            self.can_cancel = True
         else:
-            self.start_button.config(text="Сгенерировать и импортировать", state="normal", cursor="hand2")
-            self.cancel_button.config(state="disabled", cursor="arrow")
+            self.start_button.config(text="Сгенерировать и импортировать", state=NORMAL, cursor="hand2")
+            self.cancel_button.config(state=DISABLED, cursor="arrow")
+            self.can_cancel = False
 
-    def _set_progress(self, value):
-        value = max(0, min(100, int(value)))
-        self.progress['value'] = value
-        self.progress_label.config(text=f"{value}%")
-        self.update_idletasks()
-
+    # ---------------- Проверка отмены -----------------
     def _check_cancel(self):
         if self.cancel_event.is_set():
+            self.progress['value'] = 0
+            self.progress_label.config(text="0%")
+            self._set_start_button_busy(False)
+            self._cleanup_file()
+            db_name = self.db_name_input.get().strip() or f"PostgreSQL{self.num_rows.get()}rows"
+            self._drop_database(db_name)
             raise RuntimeError("cancelled")
 
-    # ---------------- Main flow ----------------
+    # ---------------- Генерация и импорт -----------------
     def _generate_and_import(self):
         try:
-            num_rows = int(self.num_rows.get())
-            num_tables = int(self.num_tables.get())
-            template = self.template_map.get(self.template_display.get(), "text")
+            num_rows = self.num_rows.get()
+            num_tables = self.num_tables.get()
+            template_key = self.template_display.get()
+            template = self.template_map.get(template_key, "text")
             db_name = self.db_name_input.get().strip() or f"PostgreSQL{num_rows}rows"
             psql_exe = self.psql_path.get()
 
-            out_dir = tempfile.gettempdir()
+            output_dir = r"C:\Users\evsir\AppData\Local\Temp"
             filename = f"PostgreSQL{num_rows}rows.sql"
-            filepath = os.path.join(out_dir, filename)
+            filepath = os.path.join(output_dir, filename)
             self.generated_file_path = filepath
 
             if num_rows <= 0 or num_tables <= 0 or not os.path.isfile(psql_exe):
-                messagebox.showerror("Ошибка", "Проверьте параметры и путь к psql.exe")
-                self._set_start_busy(False)
+                messagebox.showerror("Ошибка", "Проверьте параметры и пути")
+                self._set_start_button_busy(False)
                 return
 
-            # GENERATION: 0..80%
-            self._log(f"Генерируем файл {filename}... (строк: {num_rows}, таблиц: {num_tables}, шаблон: {self.template_display.get()})")
-            gen_start = time.time()
+            self._log(f"Генерируем файл {filename}...")
             self._generate_sql_file(filepath, num_rows, num_tables, template)
-            gen_elapsed = time.time() - gen_start
             self._check_cancel()
+            self._log(f"Файл сгенерирован: {filepath}")
 
-            size_mb = os.path.getsize(filepath) / (1024*1024)
-            self._log(f"Генерация завершена. Всего строк: {num_rows}. Время генерации: {gen_elapsed:.2f} сек.")
-            self._log(f"Размер сгенерированного файла: {size_mb:.2f} MB")
-            self._log(f"Файл расположен: {filepath}")
-
-            # CREATE DB
             self._log(f"Создаём базу данных {db_name}...")
+            self.progress['value'] = 70
+            self.progress_label.config(text="70%")
+            self.update_idletasks()
+            self._check_cancel()
             if not self._create_database(db_name):
-                self._log("Ошибка создания базы данных.", color="red")
-                self._set_start_busy(False)
+                self._log("Ошибка создания базы данных.")
                 return
             self._check_cancel()
-            self._log("База создана.")
+            self.progress['value'] = 80
+            self.progress_label.config(text="80%")
+            self.update_idletasks()
 
-            # IMPORT: 80..100%
-            import_start = time.time()
-            total_count, table_count = self._import_sql(db_name, filepath)
-            import_elapsed = time.time() - import_start
-            self._check_cancel()
+            self._log("Начинаем импорт...")
+            if not self._import_sql(db_name, filepath):
+                self._log("Импорт завершился с ошибкой.")
+                return
 
-            # database real size
-            real_size_mb = None
             try:
-                conn = psycopg2.connect(dbname=db_name, user=self.user.get(), password=self.password.get(),
-                                        host=self.host.get(), port=self.port.get())
+                conn = psycopg2.connect(
+                    dbname=db_name,
+                    user=self.user.get(),
+                    password=self.password.get(),
+                    host=self.host.get(),
+                    port=self.port.get()
+                )
                 cur = conn.cursor()
-                cur.execute("SELECT pg_database_size(%s);", (db_name,))
-                bytes_size = cur.fetchone()[0]
-                real_size_mb = round(bytes_size / (1024*1024), 2)
-                cur.close(); conn.close()
-                self._log(f"Реальный размер базы: {real_size_mb} MB")
+                cur.execute(f"SELECT pg_size_pretty(pg_database_size('{db_name}'));")
+                real_size = cur.fetchone()[0]
+                self._log(f"Реальный размер базы: {real_size}")
+                cur.close()
+                conn.close()
             except Exception as e:
-                self._log(f"Ошибка при получении размера базы: {e}", color="red")
+                self._log(f"Ошибка при получении размера базы: {e}")
 
+            self.progress['value'] = 100
+            self.progress_label.config(text="100%")
             self._cleanup_file()
+            self._log(f"База данных '{db_name}' успешно создана и импортирована.")
+            self._log("Процесс завершён.")
 
-            final_size = f"{real_size_mb} MB" if real_size_mb is not None else "неизвестно"
-            self._log(f"ИТОГ: вставлено {total_count} строк в {table_count} таблиц. Размер базы '{db_name}': {final_size}",
-                      color="green", bold=True)
-
-        except RuntimeError:
-            pass
+        except RuntimeError as e:
+            if str(e) == "cancelled":
+                self._log("Процесс отменён пользователем.")
         except Exception as e:
-            self._log(f"Ошибка: {e}", color="red")
+            self._log(f"Ошибка: {e}")
         finally:
-            self._set_start_busy(False)
-            if not self.cancel_event.is_set():
-                self._set_progress(100)
+            self._set_start_button_busy(False)
 
-    # ---------------- Generation routine ----------------
-    def _generate_sql_file(self, filepath, total_rows, num_tables, template):
-        total_written = 0
-        base_rows = total_rows // num_tables
-        extra_rows = total_rows % num_tables
+    # ---------------- SQL генерация -----------------
+    def _generate_sql_file(self, filepath, num_rows, num_tables, template):
+        total_rows_inserted = 0
+        row_overhead = 23
+        toast_factor = 1.1 if template == "text" else 1.0
 
         with open(filepath, "w", encoding="utf-8") as f:
-            for t in range(1, num_tables+1):
+            for t in range(1, num_tables + 1):
                 self._check_cancel()
                 table_name = f"table_{t}"
                 if template == "text":
@@ -401,40 +349,37 @@ class App(tb.Window):
                 else:
                     f.write(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY, content TEXT);\n")
 
-                rows_in_table = base_rows + (1 if t <= extra_rows else 0)
-                self._log(f"{table_name}: {rows_in_table} строк")
-
-                chunk_size = 2000
-                written = 0
-                while written < rows_in_table:
+                while total_rows_inserted < num_rows:
                     self._check_cancel()
-                    take = min(chunk_size, rows_in_table - written)
-                    vals = []
-                    for _ in range(take):
+                    batch_size = min(1000, num_rows - total_rows_inserted)
+                    current_batch = []
+
+                    for _ in range(batch_size):
                         if template == "text":
                             text_sample = ''.join(random.choices(string.ascii_letters + " ", k=50)).replace("'", "''")
-                            vals.append(f"(DEFAULT, '{text_sample}')")
+                            current_batch.append(f"(DEFAULT, '{text_sample}')")
                         elif template == "user":
                             name = ''.join(random.choices(string.ascii_letters, k=7))
                             email = name.lower() + "@example.com"
-                            vals.append(f"(DEFAULT, '{name}', '{email}')")
+                            current_batch.append(f"(DEFAULT, '{name}', '{email}')")
                         elif template == "order":
                             date_str = f"2025-07-{random.randint(1,28):02d}"
-                            total_val = round(random.uniform(10, 1000), 2)
-                            vals.append(f"(DEFAULT, '{date_str}', {total_val})")
+                            total = round(random.uniform(10, 1000), 2)
+                            current_batch.append(f"(DEFAULT, '{date_str}', {total})")
                         else:
-                            vals.append(f"(DEFAULT, 'sample text')")
-                    f.write(f"INSERT INTO {table_name} VALUES {', '.join(vals)};\n")
-                    written += take
-                    total_written += take
-                    if total_rows > 0:
-                        frac = total_written / total_rows
-                        prog = 0 + 80 * frac
-                        self._set_progress(prog)
-        self._set_progress(80)
-        self._log("Генерация SQL завершена.")
+                            current_batch.append(f"(DEFAULT, 'sample text')")
+                        total_rows_inserted += 1
 
-    # ---------------- Create DB ----------------
+                    f.write(f"INSERT INTO {table_name} VALUES {', '.join(current_batch)};\n")
+
+                    progress_value = min(70, (total_rows_inserted / num_rows) * 70)
+                    self.progress['value'] = progress_value
+                    self.progress_label.config(text=f"{int(progress_value)}%")
+                    self.update_idletasks()
+
+        self._log(f"Генерация завершена. Всего строк: {total_rows_inserted}")
+
+    # ---------------- Создание базы -----------------
     def _create_database(self, db_name):
         host = self._resolve_host(self.host.get())
         env = os.environ.copy()
@@ -443,131 +388,92 @@ class App(tb.Window):
         port, user = self.port.get(), self.user.get()
         try:
             subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
-                            "-c", f'DROP DATABASE IF EXISTS "{db_name}";'], capture_output=True, text=True, env=env)
-            res = subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
-                                  "-c", f'CREATE DATABASE "{db_name}";'], capture_output=True, text=True, env=env)
-            if res.returncode != 0:
-                self._log(f"Ошибка создания БД: {res.stderr.strip()}", color="red")
+                            "-c", f'DROP DATABASE IF EXISTS "{db_name}";'],
+                           capture_output=True, text=True, env=env)
+            result = subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
+                            "-c", f'CREATE DATABASE "{db_name}";'],
+                            capture_output=True, text=True, env=env)
+            if result.returncode != 0:
+                self._log(result.stderr)
                 return False
             return True
         except Exception as e:
-            self._log(f"Ошибка создания БД: {e}", color="red")
+            self._log(f"Ошибка создания базы: {e}")
             return False
 
-    # ---------------- Import SQL ----------------
+    # ---------------- Импорт SQL -----------------
     def _import_sql(self, db_name, filepath):
         host = self._resolve_host(self.host.get())
         env = os.environ.copy()
         env["PGPASSWORD"] = self.password.get()
         psql = self.psql_path.get()
         port, user = self.port.get(), self.user.get()
-
-        table_names = []
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if s.upper().startswith("CREATE TABLE"):
-                        m = re.search(r'CREATE TABLE IF NOT EXISTS\s+"?([^\s"(]+)"?', s, re.IGNORECASE)
-                        if m:
-                            table_names.append(m.group(1))
-        except Exception as e:
-            self._log(f"Не удалось прочитать SQL-файл: {e}", color="red")
-
-        try:
-            self.psql_process = subprocess.Popen([psql, f"--host={host}", f"--port={port}",
-                                                  f"--username={user}", "-d", db_name, "-f", filepath],
-                                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                 text=True, bufsize=1, env=env)
-        except Exception as e:
-            self._log(f"Не удалось запустить psql: {e}", color="red")
-            return 0, len(table_names)
-
-        cur_prog = 80.0
-        last_tick = time.time()
-        try:
-            for raw in self.psql_process.stdout:
+            self.psql_process = subprocess.Popen([psql, f"--host={host}", f"--port={port}", f"--username={user}",
+                                                 "-d", db_name, "-f", filepath],
+                                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            while True:
+                line = self.psql_process.stdout.readline()
+                if not line:
+                    break
+                self._log(line.strip())
+                self.update_idletasks()
                 self._check_cancel()
-                now = time.time()
-                if now - last_tick >= 0.05 and cur_prog < 99:
-                    cur_prog += 0.4
-                    self._set_progress(cur_prog)
-                    last_tick = now
             self.psql_process.wait()
-        except RuntimeError:
-            if self.psql_process and self.psql_process.poll() is None:
-                try:
-                    self.psql_process.terminate()
-                except Exception:
-                    pass
-        finally:
             self.psql_process = None
+            return True
+        except RuntimeError:
+            return False
+        except Exception as e:
+            self._log(f"Ошибка импорта: {e}")
+            return False
 
-        if cur_prog < 99:
-            self._set_progress(99)
-
-        total_count = 0
-        for t in table_names:
-            self._check_cancel()
-            try:
-                res = subprocess.run([psql, f"--host={host}", f"--port={self.port.get()}", f"--username={self.user.get()}",
-                                      "-d", db_name, "-t", "-c", f'SELECT COUNT(*) FROM "{t}";'],
-                                     capture_output=True, text=True, env=env)
-                count_str = (res.stdout or "").strip()
-                count = int(count_str) if count_str else 0
-                total_count += count
-            except Exception:
-                pass
-        self._set_progress(100)
-        return total_count, len(table_names)
-
-    # ---------------- Drop DB ----------------
+    # ---------------- Drop базы -----------------
     def _drop_database(self, db_name):
         host = self._resolve_host(self.host.get())
         env = os.environ.copy()
         env["PGPASSWORD"] = self.password.get()
         psql = self.psql_path.get()
+        port, user = self.port.get(), self.user.get()
         try:
-            subprocess.run([psql, f"--host={host}", f"--port={self.port.get()}", f"--username={self.user.get()}",
-                            "-d", "postgres", "-c", f'DROP DATABASE IF EXISTS "{db_name}";'],
+            subprocess.run([psql, f"--host={host}", f"--port={port}", f"--username={user}", "-d", "postgres",
+                            "-c", f'DROP DATABASE IF EXISTS "{db_name}";'],
                            capture_output=True, text=True, env=env)
         except Exception as e:
-            self._log(f"Ошибка удаления базы: {e}", color="red")
+            self._log(f"Ошибка удаления базы: {e}")
 
-    # ---------------- Cleanup file ----------------
+    # ---------------- Удаление временного файла -----------------
     def _cleanup_file(self):
-        path = self.generated_file_path
-        if not path:
-            return
-        for attempt in range(5):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    self._log(f"Временный файл {path} удалён.")
+        try:
+            if self.generated_file_path and os.path.exists(self.generated_file_path):
+                os.remove(self.generated_file_path)
+                self._log(f"Временный файл {self.generated_file_path} удалён.")
                 self.generated_file_path = None
-                return
-            except Exception as e:
-                if attempt == 4:
-                    self._log(f"Ошибка удаления временного файла: {e}", color="red")
-                time.sleep(0.25)
+        except Exception as e:
+            self._log(f"Ошибка удаления файла: {e}")
 
-    # ---------------- Test connection ----------------
+    # ---------------- Тест подключения -----------------
     def _test_connection(self):
         try:
-            conn = psycopg2.connect(dbname="postgres", user=self.user.get(), password=self.password.get(),
-                                    host=self.host.get(), port=self.port.get())
+            conn = psycopg2.connect(
+                dbname="postgres",
+                user=self.user.get(),
+                password=self.password.get(),
+                host=self.host.get(),
+                port=self.port.get()
+            )
             conn.close()
             messagebox.showinfo("Подключение", "Соединение успешно!")
         except Exception as e:
-            messagebox.showerror("Ошибка подключения", f"{e}")
+            messagebox.showerror("Ошибка", f"Не удалось подключиться: {e}")
 
-    # ---------------- Host resolve ----------------
+    # ---------------- Хост -----------------
+   
     def _resolve_host(self, host):
-        if not host:
-            return "127.0.0.1"
         if host.lower() in ("localhost", "127.0.0.1"):
             return "127.0.0.1"
         return host
+
 
 if __name__ == "__main__":
     write_version_file(__version__)
